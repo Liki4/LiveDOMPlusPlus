@@ -1,0 +1,534 @@
+<!DOCTYPE html><meta charset=utf-8>
+<title>Live DOM Viewer++ | XSS Academy</title>
+<style>
+    /* CSS inspired by @RenateUSB: https://jsfiddle.net/1fynun7a/1591/ */
+    ul.tree, ul.tree ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        font-family: monospace;
+        word-break: break-all;
+    }
+    ul.tree ul {
+        margin-left: 1.0em;
+    }
+    ul.tree li {
+        margin-left: 0.35em;
+        border-left: thin solid black;
+    }
+    ul.tree li:before {
+        width: 0.9em;
+        height: 0.6em;
+        margin-right: 0.1em;
+        vertical-align: top;
+        border-bottom: thin solid black;
+        content: "";
+        display: inline-block;
+    }
+    ul.tree :last-child {
+        border-left: none;
+    }
+    ul.tree :last-child:before {
+        border-left: thin solid black;
+    }
+    li {
+        color: #888;
+    }
+    .tag-name {
+        color: purple;
+    }
+    .attr-name {
+        color: darkgoldenrod;
+    }
+    .attr-value {
+        color: blue;
+    }
+    .text-node {
+        color: black;
+    }
+    .comment-node {
+        color: green;
+    }
+
+    .monaco {
+        width: 100%;
+        height: 300px;
+        resize: vertical;
+        overflow: hidden;
+    }
+    #input {
+        width:100%;
+        height: 100px;
+    }
+    details {
+        user-select: none;
+    }
+    small {
+        color: grey;
+    }
+    small a {
+        color: lightgray;
+    }
+</style>
+<noscript>
+    This page cannot word propertly without JavaScript, sorry! Please 
+    enable JS in your browser.
+</noscript>
+<h1>LiveDOM++</h1>
+<p>
+    Enter HTML markup below and compare how it is parsed by various parsers and sanitizers.
+</p>
+
+<div id=app>
+    <textarea id=input v-model="input" autofocus spellcheck="false"></textarea>
+
+    <hr>
+    <div id=output>
+        <template v-for=" { node, title } in outputs">
+            <strong v-if="typeof title !== 'undefined'">{{ title }}</strong>
+            <pre wrap v-if="typeof node === 'string'">{{ node }}</pre>
+            <tree-view v-else :root="node" :with-namespace="withNamespace"></tree-view>
+            <hr>
+        </template>
+    </div>
+    <hr>
+        <h2>
+            Options
+        </h2>
+        <label for="shared-link">Link to share:</label>
+        <input ref="shareLink" readonly value="" v-model="shareLink">
+        <button @click="copyToClipboard">Copy to clipboard</button>
+        <br>
+        <label for="parser">Parser: </label>
+        <select name="parser" id="parser" v-model="parser" @change="updateParser(true)">
+            <option v-for="parser in parsers" :value="parser" :disabled="typeof parser.code === 'undefined'">
+                {{ parser.name }}
+            </option>
+        </select>
+
+        <br>
+        <label for="display-namespaces">Display namespaces</label><input type="checkbox" name=display-namespaces id=display-namespaces v-model="withNamespace">
+        <br>
+        <label for="show-editor">Display editor</label><input type="checkbox" name=show-editor id=show-editor v-model=showEditor>
+        <div :style="{ display: showEditor ? 'block' : 'none' }" >
+            <monaco-editor v-model="parserCode"></monaco-editor>
+            <button @click="updateParser(false)">Update parser</button>
+        </div>
+        <hr>
+        
+</div>
+<small>
+    This tool is used as a part of <a href="https://xss.academy">XSS Academy</a> training.
+    Inspired by <a href="https://software.hixie.ch/utilities/js/live-dom-viewer/">Live DOM Viewer</a> by Hixie.
+</small>
+
+<script type="text/x-template" id="tree-view">
+    
+    <ul class="tree">
+        <tree-node v-if="root.nodeType != null" :node="root" :with-namespace="withNamespace" :doc-fragment-name="docFragmentName"></tree-node>
+        <template v-else>
+            <tree-node v-for="(node, index) in root" :key="index" :node="node" :with-namespace="withNamespace"></tree-node>
+        </template>
+    </ul>
+</script>
+
+<script type="text/x-template" id="tree-node">
+        <li :class="{
+            'tag': node.nodeType === 1,
+            'comment-node': node.nodeType === 8
+        }">
+            <template v-if="node.nodeType === 1 /*ELEMENT_NODE*/">&lt;<span class="tag-name"><template v-if="withNamespace">{{ toShortNamespace(node.namespaceURI) }} </template>{{ asciiLowerCase(node.nodeName) }}</span><template v-if="node.attributes.length > 0">
+                    <template v-for="attr in node.attributes">
+                        &#32;<span class="attr-name">{{ attr.name }}</span>="<span class="attr-value">{{ attr.value }}</span>"
+                    </template></template><template v-if="node.childNodes.length === 0"> /</template>&gt;
+           </template><template v-else-if="node.nodeType === 3/*TEXT_NODE*/">#text: "<span class="text-node">{{ node.nodeValue }}</span>"
+            </template><template v-else-if="node.nodeType === 8/*COMMENT_NODE*/">#comment: <span class="comment-text">{{ node.nodeValue }}</span>
+            </template><template v-else-if="node.nodeType === 9/*DOCUMENT_NODE*/">#document
+            </template><template v-else-if="node.nodeType === 10/*DOCUMENT_TYPE_NODE*/">&lt;!DOCTYPE <span class="name">{{ node.nodeName }}</span>&gt;
+            </template><template v-else-if="node.nodeType === 11/*DOCUMENT_FRAGMENT_NODE*/">#document-fragment <template v-if="typeof docFragmentName === 'string'">({{ docFragmentName }})</template>
+            </template>
+            <tree-view v-if="node.childNodes && node.childNodes.length > 0" :with-namespace="withNamespace" :root="node.childNodes"></tree-view>
+            <tree-view v-if="node.content" :with-namespace="withNamespace" :root="node.content" doc-fragment-name="template content"></tree-view>
+            <tree-view v-if="node.shadowRoot" :with-namespace="withNamespace" :root="node.shadowRoot" doc-fragment-name="shadow root"></tree-view>
+        </li>
+</script>
+
+<script type="text/x-template" id="iframe-html">
+    <!doctype html><meta charset=utf-8>
+    <script type=module>
+        // RANDOM
+        function node2object(currentNode) {
+            const output = {
+                attributes: null,
+                nodeType: null,
+                nodeName: null,
+                nodeValue: null,
+                namespaceURI: null,
+                childNodes: null,
+                shadowRoot: null,
+                content: null,
+            };
+            if (currentNode.attributes) {
+                output.attributes = currentNode.getAttributeNames().map(attr => ({
+                    name: attr,
+                    value: currentNode.getAttribute(attr),
+                }));
+            }
+            if (currentNode.shadowRoot) {
+                output.shadowRoot = node2object(currentNode.shadowRoot);
+            }
+            if (currentNode instanceof HTMLTemplateElement) {
+                output.content = node2object(currentNode.content);
+            }
+            output.nodeType = currentNode.nodeType;
+            output.nodeName = currentNode.nodeName;
+            output.namespaceURI = currentNode.namespaceURI;
+            output.childNodes = new Array(currentNode.childNodes.length);
+            for (let i = 0; i < currentNode.childNodes.length; ++i) {
+                output.childNodes[i] = node2object(currentNode.childNodes[i]);
+            }
+            output.nodeValue = currentNode.nodeValue;
+
+            return output;
+        }
+
+        const code = window.name;
+        const klazz = eval('(' + CODE + ')');
+        const parser = new klazz();
+        let random = 0;
+        window.parser = parser;
+        if (typeof parser.init === 'function') {
+            parser.init();
+        }
+        function display(data, title) {
+            if (data.nodeType) {
+                data = node2object(data);
+            }
+            parent.postMessage({ output: data, title, random }, '*');
+        }
+
+        addEventListener('message', ev => {
+            if (ev.source !== parent) return;
+
+            if (typeof ev.data.parse === 'string') {
+                random = Math.random();
+                parser.parse(ev.data.parse);
+            }
+        });
+    SCRIPT_CLOSE
+</script>
+<script type="module">
+    import Vue from 'https://cdn.jsdelivr.net/npm/vue@2.6.12/dist/vue.esm.browser.js';
+    const PARSERS = [
+        {
+            "name": "Parsers"
+        },
+        {
+            "name": "DOMParser",
+            "code": "class DOMParser_ { \n    parse(s) { \n        display(new DOMParser().parseFromString(s, 'text/html')); \n    } \n}"
+        },
+        {
+            "name": "template.innerHTML",
+            "code": "class TemplateInnerHTML {\n    init() {\n        this.template = document.createElement('template');\n    }\n    parse(s) {\n        this.template.innerHTML = s;\n        display(this.template.content);\n    }\n}"
+        },
+        {
+            "name": "iframe srcdoc (scripting enabled)",
+            "code": "class IframeSrcdoc {\n    init() {\n        this.iframe = document.createElement('iframe');\n        document.body.appendChild(this.iframe);\n    }\n    parse(s) {\n        this.iframe.srcdoc = s;\n        this.iframe.onload = () => {\n            display(this.iframe.contentDocument);\n        }\n    }\n}"
+        },
+        {
+            "name": "iframe srcdoc (scripting disabled)",
+            "code": "class IframeSrcdoc {\n    init() {\n        this.iframe = document.createElement('iframe');\n        this.iframe.sandbox = 'allow-same-origin';\n        document.body.appendChild(this.iframe);\n    }\n    parse(s) {\n        this.iframe.srcdoc = s;\n        this.iframe.onload = () => {\n            display(this.iframe.contentDocument);\n        }\n    }\n}"
+        },
+        {
+            "name": "Sanitizers"
+        },
+        {
+            "name": "DOMPurify Latest",
+            "code": "class DOMPurifier { \n    init() {\n        const s = document.createElement('script');\n        s.src = 'https://cure53.de/purify.js';\n        document.head.append(s);\n    }\n    parse(s) { \n        display(new DOMParser().parseFromString(s, 'text/html'), 'Before sanitization');\n        const sanitized = DOMPurify.sanitize(s);\n        display(sanitized, 'Sanitized string');\n        display(new DOMParser().parseFromString(sanitized, 'text/html'), 'Sanitized string as DOM');\n    } \n}"
+        },
+        {
+            "name": "DOMPurify 2.1.0",
+            "code": "class DOMPurifier { \n    init() {\n        const s = document.createElement('script');\n        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/dompurify/2.1.0/purify.min.js';\n        document.head.append(s);\n    }\n    parse(s) { \n        display(new DOMParser().parseFromString(s, 'text/html'), 'Before sanitization');\n        const sanitized = DOMPurify.sanitize(s);\n        display(sanitized, 'Sanitized string');\n        display(new DOMParser().parseFromString(sanitized, 'text/html'), 'Sanitized string as DOM');\n    } \n}"
+        },
+        {
+            "name": "Closure",
+            "code": "class ClosureSanitizer { \n    init() {\n        const iframe = this.iframe = document.createElement('iframe');\n        iframe.srcdoc = `\n        <script src=https://google.github.io/closure-library/source/closure/goog/base.js><\\/script>\n        <script>\n          goog.require('goog.html.sanitizer.HtmlSanitizer');\n          goog.require('goog.dom');\n        <\\/script>`;\n        document.body.append(iframe);\n    }\n\n    parse(s) { \n        const goog = this.iframe.contentWindow.goog;\n        const sanitizer = new goog.html.sanitizer.HtmlSanitizer.Builder()\n            .build();\n        const sanitized = sanitizer.sanitize(s);\n        const node = goog.dom.safeHtmlToNode(sanitized);\n        const frag = document.createDocumentFragment();\n        frag.append(node);\n        display(frag);\n    } \n}"
+        },
+        {
+            "name": "Firefox Sanitizer (Nightly only)",
+            "code": "class FirefoxSanitizer { \n    init() {\n        if (typeof window.Sanitizer !== 'function') {\n            display('Make sure you use Firefox Nightly!');\n            return;\n        }\n        this.template = document.createElement('template');\n        this.sanitizer = new Sanitizer();\n\n    }\n    parse(s) { \n        this.template.innerHTML = s;\n        display(this.template.content, 'Before sanitization');\n        const sanitized = this.sanitizer.sanitizeToString(s);\n        display(sanitized, 'Sanitized string');\n        const div = document.createElement('div');\n        div.innerHTML = sanitized;\n        display(div, 'Sanitized string as DOM');\n    } \n}"
+        },
+        {
+            "name": "Other"
+        },
+        {
+            "name": "Custom",
+            "code": "class CustomCode {\n    /** \n     * Use `init()` for any initialization, for instance for loading external JavaScript file.\n     */\n    init() {\n\n    }\n    /**\n     * This function takes `s` (string to be parsed) as an argument, and should call\n     * `display()` with a DOM node or string to be shown.\n     * @param {string} s - string to be parsed\n     */\n    parse(s) { \n        display('I can display a string!');\n        display(new DOMParser().parseFromString(s, 'text/html')) // or a node!\n    } \n}",
+        }
+    ];
+
+    function promisifiedScriptLoad(src) {
+        return new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = src;
+            script.onload = resolve;
+            script.onerror = reject;
+            document.head.appendChild(script);
+        });
+    }
+
+    Vue.component('monaco-editor', {
+        template: `<div class="monaco"></div>`,
+        props: {
+            value: {
+                type: String,
+                default: ''
+            },
+            language: {
+                type: String,
+                default: 'javascript'
+            }
+        },
+        async mounted() {
+            if (typeof monaco === 'undefined') {
+                const MONACO_VERSION = '0.21.2';
+                const MONACO_BASE = `https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/${MONACO_VERSION}/min`;
+                await promisifiedScriptLoad(`${MONACO_BASE}/vs/loader.min.js`);
+                require.config({ paths: { vs: `${MONACO_BASE}/vs` } });
+                window.MonacoEnvironment = {
+                    getWorkerUrl: function(workerId, label) {
+                        return `data:text/javascript;charset=utf-8,${encodeURIComponent(`
+                            self.MonacoEnvironment = {
+                                baseUrl: ${JSON.stringify(MONACO_BASE+'/')}
+                            };
+                            importScripts(${JSON.stringify(MONACO_BASE + '/vs/base/worker/workerMain.js')});
+                        `)}`;
+                    }
+                }
+                await new Promise(r => require(["vs/editor/editor.main"], r));
+            }
+            this.$editor = monaco.editor.create(this.$el, {
+                language: this.language,
+                value: this.value,
+                automaticLayout: true,
+                minimap: {
+                    enabled: false,
+                },
+                wordWrap: "on"
+            });
+
+            this.$editor.onDidChangeModelContent(ev => {
+                this.$emit('input', this.$editor.getValue());
+            });
+
+        },
+        data() {
+            return {
+                $editor: null,
+            }
+        },
+        watch: {
+            value() {
+                if (!this.$editor) return;
+
+                if (this.value !== this.$editor.getValue()) {
+                    this.$editor.setValue(this.value);
+                }
+            }
+        }
+    });
+
+    Vue.component('tree-node', {
+        template: '#tree-node',
+        props: ['node', 'withNamespace', 'docFragmentName'],
+        methods: {
+            toShortNamespace(s) {
+                switch (s) {
+                    case 'http://www.w3.org/1999/xhtml':
+                        return 'html';
+                    case 'http://www.w3.org/2000/svg':
+                        return 'svg';
+                    case 'http://www.w3.org/1998/Math/MathML':
+                        return 'math';
+                    default:
+                        return s;
+                }
+            },
+            asciiLowerCase(s) {
+                return s.replace(/[A-Z]+/g, r => r.toLowerCase());
+            }
+        }
+    });
+
+    Vue.component('tree-view', {
+        template: '#tree-view',
+        props: ['root', 'withNamespace', 'docFragmentName'],
+        methods: {
+            toShortNamespace(s) {
+                switch (s) {
+                    case 'http://www.w3.org/1999/xhtml':
+                        return 'html';
+                    case 'http://www.w3.org/2000/svg':
+                        return 'svg';
+                    case 'http://www.w3.org/1998/Math/MathML':
+                        return 'math';
+                    default:
+                        return s;
+                }
+            },
+            asciiLowerCase(s) {
+                return s.replace(/[A-Z]+/g, r => r.toLowerCase());
+            }
+        }
+    });
+
+    const IFRAME_SRC = document.getElementById('iframe-html').text.trim().replace('SCRIPT_CLOSE', '<\/script>');
+    const STORAGE_NAME = 'livedom++-config';
+    let iframe = document.createElement('iframe');
+    iframe.width = iframe.height = iframe.frameBorder = 0;
+    
+    document.body.append(iframe);
+
+    const app = new Vue({
+        el: '#app',
+        async mounted() {
+            window.addEventListener('message', ev => {
+                if (ev.source !== iframe.contentWindow) return;
+
+                if (ev.data.output) {
+                    if (ev.data.random !== this.lastRandom) {
+                        this.lastRandom = ev.data.random;
+                        this.outputs = [];
+                    }
+                    this.outputs.push({ node: ev.data.output, title: ev.data.title });
+                }
+            });
+            window.addEventListener('unload', ev => {
+                this.saveConfig();
+            });
+            this.loadConfig();
+            this.loadDataFromHash();
+            
+        },
+        data: {
+            outputs: [],
+            parser: PARSERS[1],
+            parsers: PARSERS,
+            input: '',
+            shareLink: '',
+            withNamespace: true,
+            parserCode: PARSERS[1].code,
+            showEditor: false,
+            isCustomParser: false,
+            lastRandom: 0,
+        },
+        watch: {
+            input() {
+                this.parse();
+            },
+            parpser() {
+                if (this.parser.name === 'Custom') {
+                    this.showEditor = true;
+                }
+                this.parserCode = this.parser.code;
+                this.updateParser();
+                this.saveConfig();
+            },
+            withNamespace() {
+                this.saveConfig();
+            },
+            showEditor() {
+                this.saveConfig();
+            },
+        },
+        methods: {
+            async updateParser(updateParserCode = false) {
+                if (updateParserCode) {
+                    this.parserCode = this.parser.code;
+                }
+                
+                iframe.srcdoc = IFRAME_SRC.replace('RANDOM', Math.random()).replace('CODE', JSON.stringify(this.parserCode).replaceAll('<', '\\u003c'));
+                await new Promise(r => iframe.onload = r);
+                iframe.onload = null;
+                this.isCustomParser = !this.parsers.find(({ code }) => code === this.parserCode);
+                this.outputs = [];
+                this.parse();
+            },
+            parse() {
+                iframe.contentWindow.postMessage({parse: this.input}, '*');
+                this.updateShareLink();
+            },
+            updateShareLink() {
+                let link = location.origin + location.pathname;
+                const info = {
+                    input: this.input,
+                };
+                if (this.isCustomParser) {
+                    info.customParser = this.parserCode;
+                } else {
+                    info.parser = this.parser.name;
+                }
+                this.shareLink = link + '#' + encodeURIComponent(JSON.stringify(info));
+            },
+            loadConfig() {
+                let val = localStorage.getItem(STORAGE_NAME);
+                if (val == null) {
+                    val = '{}';
+                }
+                const config = JSON.parse(val);
+                this.showEditor = config.showEditor ?? true;
+                this.withNamespace = config.withNamespace ?? true;
+                this.input = config.input ?? '';
+                if (typeof config.parserCode === 'string') {
+                    this.parserCode = config.parserCode;
+                    this.updateParser(false);
+                } else {
+                    const parserName = config.parser ?? 'DOMParser';
+                    const parser = this.parsers.find(({ name }) => name === parserName);
+                    if (parser) {
+                        this.parser = parser;
+                    } else {
+                        this.parser = this.parsers[1];
+                    }
+                    this.updateParser(true);
+                }
+
+            },
+            saveConfig() {
+                const config = {
+                    showEditor: this.showEditor,
+                    withNamespace: this.withNamespace,
+                    input: this.input,
+                };
+
+                if (this.isCustomParser) {
+                    config.parserCode = this.parserCode;
+                } else {
+                    config.parser = this.parser.name;
+                }
+                localStorage.setItem(STORAGE_NAME, JSON.stringify(config));
+            },
+            copyToClipboard() {
+                this.$refs.shareLink.select();
+                document.execCommand('copy');
+            },
+            loadDataFromHash() {
+                if (location.hash.length < 2) return;
+                try {
+                    const data = JSON.parse(decodeURIComponent(location.hash.slice(1)));
+                    this.input = data.input;
+                    if (typeof data.parser === 'string') {
+                        this.parser = this.parsers.find(({ name }) => name === data.parser);
+                        this.updateParser(true);
+                    } else if (typeof data.customParser === 'string') {
+                        this.parserCode = data.customParser;
+                        this.parser = this.parsers.find(({ name }) => name === "Custom");
+                        this.updateParser(false);
+                    }
+                } catch { }
+                history.replaceState(null, null, location.origin + location.pathname);
+            },
+        }
+    });
+    window.app = app;
+</script>
